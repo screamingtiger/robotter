@@ -4,11 +4,51 @@ Python command handling for a two-track tank driven by two bidirectional ESCs on
 
 ## Architecture and safety
 
-The Linux MPU only sends high-level intent over Arduino Router Bridge. The STM32U585 real-time MCU owns the two PWM signals, ESC arming, timed pivots, and a 250 ms command watchdog. If Linux, the Python process, or its heartbeat stops, the RT firmware drives both channels to neutral and disarms.
+The Linux MPU only sends high-level intent over Arduino Router Bridge. The STM32U585 real-time MCU owns the two PWM signals, ESC arming, timed pivots, a 250 ms command watchdog, and NMEA GPS ingestion. If Linux, the Python process, or its heartbeat stops, the RT firmware drives both channels to neutral and disarms.
 
 `firmware/tank_rt/tank_rt.ino` intentionally has no default PWM pins. It will compile, but `ARM` is rejected until both `LEFT_ESC_PIN` and `RIGHT_ESC_PIN` are explicitly provided at compile time. The code is not flashed as part of this project setup.
 
-`STOP`, a failed command timeout, and Ctrl+C always request neutral PWM. A 90-degree turn is timing-based and must be calibrated on the finished chassis; it cannot be exact without feedback such as encoders or an IMU.
+`STOP`, a failed command timeout, and Ctrl+C always request neutral PWM. A 90-degree turn is timing-based and must be calibrated for the finished chassis; it cannot be exact without an IMU or wheel encoders.
+
+## ESC signal wiring
+
+Use the STM32U585 PWM outputs on the UNO-style digital header:
+
+| Connection | Arduino UNO Q pin |
+| --- | --- |
+| Left ESC signal | `D9` |
+| Right ESC signal | `D10` |
+| Both ESC signal grounds | Any Arduino Q `GND` pin |
+
+`D9` and `D10` are 3.3 V PWM-capable GPIO pins. Their PWM signal levels are **3.3 V**, not 5 V. Confirm that the ESC control input accepts a 3.3 V logic-high signal before connecting it. If the ESC requires 5 V logic, use a dedicated 3.3 V-to-5 V buffer/level shifter on each signal; never feed 5 V into an Arduino Q GPIO.
+
+The ESCs may use their own motor-power rails, but their signal grounds must share a common ground with the Arduino Q. Do not connect an ESC BEC's positive (typically red) lead to the Arduino Q 3.3 V or 5 V rails when the ESC is separately powered; insulate that unused lead. Keep motor current off the Arduino Q power rails.
+
+Before compiling for physical hardware, set `LEFT_ESC_PIN=9` and `RIGHT_ESC_PIN=10`, verify both ESC pulse calibration values, test with tracks lifted, and retain a physical emergency stop.
+
+## GPS receiver wiring and logging
+
+The reusable GPS receiver interface expects standard **NMEA 0183** sentences at 9,600 baud on the RT MCU hardware UART (`Serial1`):
+
+| Connection | Arduino UNO Q pin |
+| --- | --- |
+| GPS TX (data from receiver) | `D0` / `Serial1 RX` |
+| GPS RX (optional receiver configuration input) | `D1` / `Serial1 TX` |
+| GPS ground | Arduino Q `GND` |
+| GPS power | Per the receiver's voltage specification |
+
+The Arduino Q UART pins are 3.3 V logic. Use a GPS receiver with a 3.3 V TX output, or level-shift the GPS TX signal before `D0`; do not apply a 5 V UART signal directly. Many GPS breakouts accept 5 V or 3.3 V supply power but still require checking their specific voltage and logic-level documentation.
+
+The RT firmware validates NMEA checksums and parses the common `RMC` and `GGA` sentences into position, ground speed, course, satellite count, HDOP, altitude, and fix age. Linux retrieves this through `gps.snapshot`; it does not open the Router's reserved serial link directly.
+
+After flashing GPS-capable firmware, start a CSV logger at the default 0.5 second interval:
+
+```sh
+cd ~/robotter
+.venv/bin/python -m robotter.gps_logger --csv logs/gps.csv --interval 0.5
+```
+
+Each row records a host timestamp, GPS data, validity, and a `moving` estimate based on GPS ground speed and distance from the previous fix. GPS can verify whether the tank is moving and its course over ground, but cannot establish whether the chassis is moving *forward* rather than backward without a body-heading reference such as an IMU/compass or wheel encoders.
 
 ## Simulator
 
@@ -33,7 +73,7 @@ STOP
 
 ## RT runtime setup
 
-On Ardy, install the missing virtual-environment support once (interactive sudo required), then install the project’s RT dependency in the project environment:
+On Ardy, install virtual-environment support once, then install the project's RT dependency:
 
 ```sh
 sudo apt-get install python3.13-venv
@@ -65,4 +105,4 @@ arduino-cli compile --fqbn arduino:zephyr:unoq \
   ~/robotter/firmware/tank_rt
 ```
 
-Before any upload, specify verified 3.3 V PWM-capable Arduino pin numbers, confirm left/right direction, calibrate `1000/1500/2000` microseconds against the ESC documentation, test with tracks lifted, and retain a physical emergency stop.
+Before any upload, verify GPS wiring/logic levels and the ESC pulse calibration, test with tracks lifted, and retain a physical emergency stop.

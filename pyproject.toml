@@ -14,6 +14,7 @@ rt = ["arduino-router-bridge"]
 [project.scripts]
 robotter = "robotter.cli:main"
 robotter-rt = "robotter.rt_cli:main"
+robotter-gps = "robotter.gps_logger:main"
 
 [tool.setuptools]
 packages = ["robotter"]

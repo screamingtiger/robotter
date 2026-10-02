@@ -2,12 +2,14 @@
  * Arduino UNO Q RT tank controller.
  *
  * The Linux MPU requests high-level movement through Arduino Router Bridge.
- * This STM32U585 sketch owns PWM generation, ESC arming, and the watchdog.
- * It deliberately cannot attach a PWM pin until both pin macros are supplied.
+ * This STM32U585 sketch owns PWM generation, ESC arming, the watchdog, and
+ * NMEA GPS ingestion from an external receiver on Serial1 (D0/D1).
  */
 
 #include <Arduino_RouterBridge.h>
 #include <Servo.h>
+
+#include "nmea_gps.h"
 
 #ifndef LEFT_ESC_PIN
 #define LEFT_ESC_PIN 255
@@ -24,9 +26,11 @@ constexpr int REVERSE_US = 1000;
 constexpr unsigned long ESC_ARM_MS = 1000;
 constexpr unsigned long COMMAND_TIMEOUT_MS = 250;
 constexpr int MAX_TIMED_COMMAND_MS = 10000;
+constexpr unsigned long GPS_BAUD = 9600;
 
 Servo leftEsc;
 Servo rightEsc;
+NmeaGps gps;
 bool armed = false;
 bool timedMotion = false;
 unsigned long lastCommandMs = 0;
@@ -103,7 +107,12 @@ bool pivotTimed(float left, float right, int durationMs) {
   return true;
 }
 
+String gpsSnapshot() {
+  return gps.snapshot();
+}
+
 void setup() {
+  Serial1.begin(GPS_BAUD);
   if (!Bridge.begin()) {
     return;
   }
@@ -111,9 +120,12 @@ void setup() {
   Bridge.provide_safe("tank.stop", stopTank);
   Bridge.provide_safe("tank.set_tracks", setTracks);
   Bridge.provide_safe("tank.pivot_timed", pivotTimed);
+  Bridge.provide_safe("gps.snapshot", gpsSnapshot);
 }
 
 void loop() {
+  gps.poll(Serial1);
+
   if (!armed) {
     delay(1);
     return;
