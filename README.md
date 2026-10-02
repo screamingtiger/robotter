@@ -4,7 +4,7 @@ Python command handling for a two-track tank driven by two bidirectional ESCs on
 
 ## Architecture and safety
 
-The Linux MPU only sends high-level intent over Arduino Router Bridge. The STM32U585 real-time MCU owns the two PWM signals, ESC arming, timed pivots, a 250 ms command watchdog, and NMEA GPS ingestion. If Linux, the Python process, or its heartbeat stops, the RT firmware drives both channels to neutral and disarms.
+The Linux MPU only sends high-level intent over Arduino Router Bridge. The STM32U585 real-time MCU owns the two PWM signals, ESC arming, timed pivots, a 250 ms command watchdog, an optional camera-turret servo, and NMEA GPS ingestion. If Linux, the Python process, or its heartbeat stops, the RT firmware drives both channels to neutral and disarms.
 
 `firmware/tank_rt/tank_rt.ino` intentionally has no default PWM pins. It will compile, but `ARM` is rejected until both `LEFT_ESC_PIN` and `RIGHT_ESC_PIN` are explicitly provided at compile time. The code is not flashed as part of this project setup.
 
@@ -25,6 +25,12 @@ Use the STM32U585 PWM outputs on the UNO-style digital header:
 The ESCs may use their own motor-power rails, but their signal grounds must share a common ground with the Arduino Q. Do not connect an ESC BEC's positive (typically red) lead to the Arduino Q 3.3 V or 5 V rails when the ESC is separately powered; insulate that unused lead. Keep motor current off the Arduino Q power rails.
 
 Before compiling for physical hardware, set `LEFT_ESC_PIN=9` and `RIGHT_ESC_PIN=10`, verify both ESC pulse calibration values, test with tracks lifted, and retain a physical emergency stop.
+
+## Camera turret
+
+The camera uses a normal positional servo driven by `D6`, with a calibrated 1,500 µs centre representing forward. The servo positive supply stays on its own rail, while servo ground and Arduino Q ground must be common. The MCU signal is 3.3 V; use a level shifter if the servo does not accept 3.3 V logic.
+
+`TCENTER` commands the forward-facing centre. `TURRET <degrees>` commands a relative angle; the software initially limits it to -60 through +60 degrees until the physical end stops and direction have been calibrated. See [the turret wiring and calibration guide](docs/turret.md).
 
 ## GPS receiver wiring and logging
 
@@ -50,6 +56,19 @@ cd ~/robotter
 
 Each row records a host timestamp, GPS data, validity, and a `moving` estimate based on GPS ground speed and distance from the previous fix. GPS can verify whether the tank is moving and its course over ground, but cannot establish whether the chassis is moving *forward* rather than backward without a body-heading reference such as an IMU/compass or wheel encoders.
 
+## AI benchmarks
+
+The repository includes a GPU OpenCL FP32 matrix-multiply benchmark and an ONNX Runtime CPU latency harness. Install the optional benchmark dependency, then run the appropriate script:
+
+```sh
+cd ~/robotter
+.venv/bin/pip install -e '.[benchmark]'
+sh benchmarks/run_opencl_sgemm.sh
+.venv/bin/python benchmarks/onnx_cpu_benchmark.py /path/to/model.onnx --threads 4
+```
+
+The OpenCL result is a GPU-compute proxy, not object-detection FPS. The ONNX harness reports actual local model-inference latency. Store downloaded models outside the repository.
+
 ## Simulator
 
 The default CLI uses `MemoryPwm`; it never drives physical GPIO.
@@ -66,6 +85,8 @@ ARM
 FWD 0.50
 LEFT 0.40
 L90
+TCENTER
+TURRET -30
 STOP
 ```
 
@@ -105,4 +126,4 @@ arduino-cli compile --fqbn arduino:zephyr:unoq \
   ~/robotter/firmware/tank_rt
 ```
 
-Before any upload, verify GPS wiring/logic levels and the ESC pulse calibration, test with tracks lifted, and retain a physical emergency stop.
+Before any upload, verify GPS and turret wiring/logic levels and the ESC pulse calibration, test with tracks lifted, and retain a physical emergency stop.

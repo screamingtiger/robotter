@@ -2,8 +2,8 @@
  * Arduino UNO Q RT tank controller.
  *
  * The Linux MPU requests high-level movement through Arduino Router Bridge.
- * This STM32U585 sketch owns PWM generation, ESC arming, the watchdog, and
- * NMEA GPS ingestion from an external receiver on Serial1 (D0/D1).
+ * This STM32U585 sketch owns PWM generation, ESC arming, the watchdog, an
+ * optional camera-turret servo, and NMEA GPS ingestion on Serial1 (D0/D1).
  */
 
 #include <Arduino_RouterBridge.h>
@@ -19,6 +19,10 @@
 #define RIGHT_ESC_PIN 255
 #endif
 
+#ifndef TURRET_SERVO_PIN
+#define TURRET_SERVO_PIN 255
+#endif
+
 constexpr uint8_t UNCONFIGURED_PIN = 255;
 constexpr int NEUTRAL_US = 1500;
 constexpr int FORWARD_US = 2000;
@@ -27,9 +31,14 @@ constexpr unsigned long ESC_ARM_MS = 1000;
 constexpr unsigned long COMMAND_TIMEOUT_MS = 250;
 constexpr int MAX_TIMED_COMMAND_MS = 10000;
 constexpr unsigned long GPS_BAUD = 9600;
+constexpr int TURRET_CENTER_US = 1500;
+constexpr int TURRET_MIN_US = 1000;
+constexpr int TURRET_MAX_US = 2000;
+constexpr float TURRET_MAX_DEGREES = 60.0f;
 
 Servo leftEsc;
 Servo rightEsc;
+Servo turretServo;
 NmeaGps gps;
 bool armed = false;
 bool timedMotion = false;
@@ -39,6 +48,11 @@ unsigned long timedDurationMs = 0;
 bool pinsConfigured() {
   return LEFT_ESC_PIN != UNCONFIGURED_PIN && RIGHT_ESC_PIN != UNCONFIGURED_PIN &&
          LEFT_ESC_PIN != RIGHT_ESC_PIN;
+}
+
+bool turretPinConfigured() {
+  return TURRET_SERVO_PIN != UNCONFIGURED_PIN && TURRET_SERVO_PIN != LEFT_ESC_PIN &&
+         TURRET_SERVO_PIN != RIGHT_ESC_PIN;
 }
 
 int pulseFor(float speed) {
@@ -107,6 +121,23 @@ bool pivotTimed(float left, float right, int durationMs) {
   return true;
 }
 
+bool setTurretAngle(float angleDegrees) {
+  if (!turretPinConfigured() || angleDegrees < -TURRET_MAX_DEGREES || angleDegrees > TURRET_MAX_DEGREES) {
+    return false;
+  }
+  if (!turretServo.attached()) {
+    turretServo.attach(TURRET_SERVO_PIN, TURRET_MIN_US, TURRET_MAX_US);
+  }
+  const float normalized = angleDegrees / TURRET_MAX_DEGREES;
+  const int pulse = TURRET_CENTER_US + static_cast<int>(normalized * (TURRET_MAX_US - TURRET_CENTER_US));
+  turretServo.writeMicroseconds(pulse);
+  return true;
+}
+
+bool centerTurret() {
+  return setTurretAngle(0.0f);
+}
+
 String gpsSnapshot() {
   return gps.snapshot();
 }
@@ -120,21 +151,20 @@ void setup() {
   Bridge.provide_safe("tank.stop", stopTank);
   Bridge.provide_safe("tank.set_tracks", setTracks);
   Bridge.provide_safe("tank.pivot_timed", pivotTimed);
+  Bridge.provide_safe("turret.center", centerTurret);
+  Bridge.provide_safe("turret.set_angle", setTurretAngle);
   Bridge.provide_safe("gps.snapshot", gpsSnapshot);
 }
 
 void loop() {
   gps.poll(Serial1);
 
-  if (!armed) {
-    delay(1);
-    return;
-  }
-
-  const unsigned long elapsed = millis() - lastCommandMs;
-  if ((timedMotion && elapsed >= timedDurationMs) ||
-      (!timedMotion && elapsed >= COMMAND_TIMEOUT_MS)) {
-    safeStop();
+  if (armed) {
+    const unsigned long elapsed = millis() - lastCommandMs;
+    if ((timedMotion && elapsed >= timedDurationMs) ||
+        (!timedMotion && elapsed >= COMMAND_TIMEOUT_MS)) {
+      safeStop();
+    }
   }
   delay(1);
 }
